@@ -418,6 +418,7 @@ class ConstantLengthDataset(IterableDataset):
         shuffle=True,
         append_concat_token=True,
         add_special_tokens=True,
+        non_contaminated_packing=False
     ):
         self.tokenizer = tokenizer
 
@@ -436,6 +437,7 @@ class ConstantLengthDataset(IterableDataset):
         self.shuffle = shuffle
         self.append_concat_token = append_concat_token
         self.add_special_tokens = add_special_tokens
+        self.non_contaminated_packing = non_contaminated_packing
         if formatting_func is None:
             self.formatting_func = lambda x: x[dataset_text_field]
         else:
@@ -472,26 +474,103 @@ class ConstantLengthDataset(IterableDataset):
             tokenized_inputs = self.tokenizer(buffer, add_special_tokens=self.add_special_tokens, truncation=False)[
                 "input_ids"
             ]
+            example_lengths = []
             all_token_ids = []
             for tokenized_input in tokenized_inputs:
                 if self.append_concat_token:
                     tokenized_input = tokenized_input + [self.concat_token_id]
+                example_lengths.append(len(tokenized_input))
                 all_token_ids.extend(tokenized_input)
             examples = []
-            for i in range(0, len(all_token_ids), self.seq_length):
-                input_ids = all_token_ids[i : i + self.seq_length]
-                if len(input_ids) == self.seq_length:
-                    examples.append(input_ids)
-            if self.shuffle:
-                random.shuffle(examples)
-            for example in examples:
-                self.current_size += 1
-                yield {
-                    "input_ids": torch.LongTensor(example),
-                    "labels": torch.LongTensor(example),
-                }
+            if not self.non_contaminated_packing:
+                for i in range(0, len(all_token_ids), self.seq_length):
+                    input_ids = all_token_ids[i : i + self.seq_length]
+                    if len(input_ids) == self.seq_length:
+                        examples.append(input_ids)
+                if self.shuffle:
+                    random.shuffle(examples)
+                for example in examples:
+                    self.current_size += 1
+                    yield {
+                        "input_ids": torch.LongTensor(example),
+                        "labels": torch.LongTensor(example),
+                    }
+            else:
+                attention_masks = []
+                position_ids = []
+                current_example_start = 0
+                current_example_length = 0
+                attention_mask = torch.tril(torch.ones((self.seq_length, self.seq_length)))
+                position_id = torch.arange(self.seq_length, dtype=torch.long)
+                # greedy packing
+                for idx, i in enumerate(example_lengths):
+                    current_len = current_example_length
+                    if current_len + i <= self.seq_length:
+                        attention_mask[current_example_length:, :current_example_length] = 0
+                        position_id[current_example_length:] = torch.arange(self.seq_length - current_example_length , dtype=torch.long)
+                        current_example_length += i
+                
+                    if current_len + i > self.seq_length or idx == len(tokenized_inputs) - 1:
+                        current_example = all_token_ids[current_example_start:current_example_start + current_example_length]
+                        if len(current_example) < self.seq_length:
+                            current_example += [self.tokenizer.pad_token_id] * (self.seq_length - len(current_example))
+                        examples.append(current_example)
+                        attention_masks.append(attention_mask.clone().unsqueeze(0))
+                        attention_mask = torch.tril(torch.ones((self.seq_length, self.seq_length)))
+                        position_ids.append(position_id.clone())
+                        current_example_start += current_example_length
+                        current_example_length = i
+                print(f"DBG: N[examples] {len(examples)}, packing fraction {len(examples)/len(buffer)}")
+                if self.shuffle:
+                    random.shuffle(examples)
+                for mask, pos, example in zip(attention_masks, position_ids, examples):
+                    self.current_size += 1
+                    yield {
+                        "input_ids": torch.LongTensor(example),
+                        "labels": torch.LongTensor(example),
+                        "attention_mask": mask,
+                        "position_ids": pos,
+                    }
 
 
+class SFTConstantLengthDataset(ConstantLengthDataset):
+    """
+    We append examples only if they fully fit into the buffer, and construct an attention mask to prevent attention cross-contamination
+    """
+    def __iter__(self):
+        iterator = iter(self.dataset)
+        more_examples = True
+        while more_examples:
+            buffer, buffer_len = [], 0
+            while True:
+                if buffer_len >= self.max_buffer_size:
+                    break
+                try:
+                    buffer.append(self.formatting_func(next(iterator)))
+                    buffer_len += len(buffer[-1])
+                except StopIteration:
+                    if self.infinite:
+                        iterator = iter(self.dataset)
+                        warnings.warn("The dataset reached end and the iterator is reset to the start.")
+                    else:
+                        more_examples = False
+                        break
+            # print(buffer)
+            tokenized_inputs = self.tokenizer(buffer, add_special_tokens=self.add_special_tokens, truncation=False)[
+                "input_ids"
+            ]
+            # print(len(tokenized_inputs), len(tokenized_inputs[0]))
+            all_token_ids = []
+            input_lengths = []
+            for tokenized_input in tokenized_inputs:
+                if self.append_concat_token:
+                    tokenized_input = tokenized_input + [self.concat_token_id]
+                if len(tokenized_input) <= self.seq_length:
+                    input_lengths.append(len(tokenized_input))
+                    all_token_ids.extend(tokenized_input)
+            # print(input_lengths)
+            examples = []
+            
 class RunningMoments:
     def __init__(self, accelerator):
         """

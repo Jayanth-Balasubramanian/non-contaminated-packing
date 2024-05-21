@@ -347,6 +347,7 @@ class SFTTrainer(Trainer):
                     args.num_of_sequences,
                     args.chars_per_token,
                     remove_unused_columns=args.remove_unused_columns if args is not None else True,
+                    non_contaminated_packing=args.non_contaminated_packing,
                     **args.dataset_kwargs,
                 )
             if eval_dataset is not None:
@@ -451,6 +452,7 @@ class SFTTrainer(Trainer):
         formatting_func,
         num_of_sequences,
         chars_per_token,
+        non_contaminated_packing=False,
         remove_unused_columns=True,
         append_concat_token=True,
         add_special_tokens=True,
@@ -504,6 +506,7 @@ class SFTTrainer(Trainer):
                 formatting_func,
                 append_concat_token,
                 add_special_tokens,
+                non_contaminated_packing
             )
 
     def _prepare_non_packed_dataloader(
@@ -572,11 +575,12 @@ class SFTTrainer(Trainer):
         formatting_func=None,
         append_concat_token=True,
         add_special_tokens=True,
+        non_contaminated_packing=False
     ):
         if dataset_text_field is not None or formatting_func is not None:
             if tokenizer is None:
                 raise ValueError("You need to pass a tokenizer when using `dataset_text_field` with `SFTTrainer`.")
-
+            
             constant_length_iterator = ConstantLengthDataset(
                 tokenizer,
                 dataset,
@@ -589,6 +593,7 @@ class SFTTrainer(Trainer):
                 eos_token_id=tokenizer.eos_token_id,
                 append_concat_token=append_concat_token,
                 add_special_tokens=add_special_tokens,
+                non_contaminated_packing=non_contaminated_packing
             )
 
             if isinstance(dataset, datasets.IterableDataset):

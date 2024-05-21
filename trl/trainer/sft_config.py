@@ -63,3 +63,4 @@ class SFTConfig(TrainingArguments):
     eval_packing: Optional[bool] = None
     num_of_sequences: Optional[int] = 1024
     chars_per_token: Optional[float] = 3.6
+    non_contaminated_packing: Optional[bool] = False

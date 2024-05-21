@@ -377,6 +377,7 @@ class SFTTrainer(Trainer):
                 "You passed a tokenizer with `padding_side` not equal to `right` to the SFTTrainer. This might lead to some unexpected behaviour due to "
                 "overflow issues when training a model in half-precision. You might consider adding `tokenizer.padding_side = 'right'` to your code."
             )
+        print("DBG: init super")
 
         super().__init__(
             model=model,
@@ -595,17 +596,20 @@ class SFTTrainer(Trainer):
                 add_special_tokens=add_special_tokens,
                 non_contaminated_packing=non_contaminated_packing
             )
-
+            print("DBG: here1")
             if isinstance(dataset, datasets.IterableDataset):
+                print("DBG: here2")
                 return constant_length_iterator
 
             def data_generator(constant_length_iterator):
                 yield from constant_length_iterator
 
             try:
+                print("DBG: creating DS from generator")
                 packed_dataset = Dataset.from_generator(
                     data_generator, gen_kwargs={"constant_length_iterator": constant_length_iterator}
                 )
+                print("DBG: done")
             except (DatasetGenerationError, SchemaInferenceError) as exc:
                 raise ValueError(
                     "Error occurred while packing the dataset. "

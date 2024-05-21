@@ -497,17 +497,17 @@ class ConstantLengthDataset(IterableDataset):
                     }
             else:
                 attention_masks = []
-                position_ids = []
+                # position_ids = []
                 current_example_start = 0
                 current_example_length = 0
                 attention_mask = torch.tril(torch.ones((self.seq_length, self.seq_length)))
-                position_id = torch.arange(self.seq_length, dtype=torch.long)
+                # position_id = torch.arange(self.seq_length, dtype=torch.long)
                 # greedy packing
                 for idx, i in enumerate(example_lengths):
                     current_len = current_example_length
                     if current_len + i <= self.seq_length:
                         attention_mask[current_example_length:, :current_example_length] = 0
-                        position_id[current_example_length:] = torch.arange(self.seq_length - current_example_length , dtype=torch.long)
+                        # position_id[current_example_length:] = torch.arange(self.seq_length - current_example_length , dtype=torch.long)
                         current_example_length += i
                 
                     if current_len + i > self.seq_length or idx == len(tokenized_inputs) - 1:
@@ -517,60 +517,24 @@ class ConstantLengthDataset(IterableDataset):
                         examples.append(current_example)
                         attention_masks.append(attention_mask.clone().unsqueeze(0))
                         attention_mask = torch.tril(torch.ones((self.seq_length, self.seq_length)))
-                        position_ids.append(position_id.clone())
+                        # position_ids.append(position_id.clone())
                         current_example_start += current_example_length
                         current_example_length = i
                 print(f"DBG: N[examples] {len(examples)}, packing fraction {len(examples)/len(buffer)}")
-                if self.shuffle:
-                    random.shuffle(examples)
-                for mask, pos, example in zip(attention_masks, position_ids, examples):
+                # if self.shuffle:
+                #     random.shuffle(examples)
+                print(len(attention_masks), len(examples))
+                for mask, example in zip(attention_masks, examples):
                     self.current_size += 1
+                    print(f'yielding example shape{example.shape}, "attention_mask": {mask.shape}')
                     yield {
                         "input_ids": torch.LongTensor(example),
                         "labels": torch.LongTensor(example),
-                        "attention_mask": mask,
-                        "position_ids": pos,
+                        "attention_mask": torch.BoolTensor(mask),
+                        # "position_ids": pos,
                     }
+                print("DBG: done yielding")
 
-
-class SFTConstantLengthDataset(ConstantLengthDataset):
-    """
-    We append examples only if they fully fit into the buffer, and construct an attention mask to prevent attention cross-contamination
-    """
-    def __iter__(self):
-        iterator = iter(self.dataset)
-        more_examples = True
-        while more_examples:
-            buffer, buffer_len = [], 0
-            while True:
-                if buffer_len >= self.max_buffer_size:
-                    break
-                try:
-                    buffer.append(self.formatting_func(next(iterator)))
-                    buffer_len += len(buffer[-1])
-                except StopIteration:
-                    if self.infinite:
-                        iterator = iter(self.dataset)
-                        warnings.warn("The dataset reached end and the iterator is reset to the start.")
-                    else:
-                        more_examples = False
-                        break
-            # print(buffer)
-            tokenized_inputs = self.tokenizer(buffer, add_special_tokens=self.add_special_tokens, truncation=False)[
-                "input_ids"
-            ]
-            # print(len(tokenized_inputs), len(tokenized_inputs[0]))
-            all_token_ids = []
-            input_lengths = []
-            for tokenized_input in tokenized_inputs:
-                if self.append_concat_token:
-                    tokenized_input = tokenized_input + [self.concat_token_id]
-                if len(tokenized_input) <= self.seq_length:
-                    input_lengths.append(len(tokenized_input))
-                    all_token_ids.extend(tokenized_input)
-            # print(input_lengths)
-            examples = []
-            
 class RunningMoments:
     def __init__(self, accelerator):
         """
